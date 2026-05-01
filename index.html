@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Excel ビジュアル再現</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Meiryo', 'メイリオ', sans-serif;
+      background: #f0f2f5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 16px;
+    }
+
+    h1 {
+      font-size: 22px;
+      color: #1a1a2e;
+      margin-bottom: 24px;
+      letter-spacing: 0.05em;
+    }
+
+    /* アップロードエリア */
+    #upload-area {
+      width: 100%;
+      max-width: 600px;
+      border: 2px dashed #4a90e2;
+      border-radius: 12px;
+      background: #fff;
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+      margin-bottom: 32px;
+    }
+
+    #upload-area.dragover {
+      background: #e8f0fe;
+      border-color: #1a73e8;
+    }
+
+    #upload-area .icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+    }
+
+    #upload-area p {
+      color: #555;
+      font-size: 15px;
+      margin-bottom: 16px;
+    }
+
+    #upload-area .hint {
+      font-size: 12px;
+      color: #999;
+    }
+
+    #file-input { display: none; }
+
+    .upload-btn {
+      display: inline-block;
+      background: #4a90e2;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 28px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .upload-btn:hover { background: #1a73e8; }
+
+    /* ファイル名表示 */
+    #file-name {
+      font-size: 13px;
+      color: #333;
+      margin-top: 12px;
+      min-height: 20px;
+    }
+
+    /* シート選択 */
+    #sheet-selector-wrap {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    #sheet-selector-wrap label {
+      font-size: 14px;
+      color: #333;
+    }
+
+    #sheet-selector {
+      padding: 6px 12px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+
+    /* エラー */
+    #error-msg {
+      color: #d93025;
+      font-size: 13px;
+      margin-bottom: 12px;
+      display: none;
+    }
+
+    /* テーブルラッパー */
+    #table-wrap {
+      width: 100%;
+      overflow-x: auto;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    /* Excelテーブル本体 */
+    #excel-table {
+      border-collapse: collapse;
+      font-size: 12px;
+      font-family: 'Meiryo', 'メイリオ', 'MS Gothic', monospace;
+      white-space: pre;
+    }
+
+    #excel-table td {
+      padding: 2px 4px;
+      min-width: 64px;
+      height: 20px;
+      vertical-align: middle;
+      border: none; /* ボーダーはインラインスタイルで再現 */
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Excel → Web ビジュアル再現</h1>
+
+  <!-- アップロードエリア -->
+  <div id="upload-area">
+    <div class="icon">📊</div>
+    <p>Excelファイルをドラッグ＆ドロップ<br>または下のボタンから選択</p>
+    <label for="file-input" class="upload-btn">ファイルを選択</label>
+    <input type="file" id="file-input" accept=".xlsx,.xls,.xlsm,.xlsb">
+    <div id="file-name"></div>
+    <div class="hint">.xlsx / .xls / .xlsm 対応</div>
+  </div>
+
+  <div id="error-msg"></div>
+
+  <!-- シート選択 -->
+  <div id="sheet-selector-wrap">
+    <label for="sheet-selector">シート：</label>
+    <select id="sheet-selector"></select>
+  </div>
+
+  <!-- テーブル出力 -->
+  <div id="table-wrap">
+    <table id="excel-table"></table>
+  </div>
+
+<script>
+  const uploadArea   = document.getElementById('upload-area');
+  const fileInput    = document.getElementById('file-input');
+  const fileNameEl   = document.getElementById('file-name');
+  const sheetWrap    = document.getElementById('sheet-selector-wrap');
+  const sheetSel     = document.getElementById('sheet-selector');
+  const tableWrap    = document.getElementById('table-wrap');
+  const table        = document.getElementById('excel-table');
+  const errorMsg     = document.getElementById('error-msg');
+
+  let workbook = null;
+
+  // ドラッグ＆ドロップ
+  uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+  uploadArea.addEventListener('dragleave', ()  => uploadArea.classList.remove('dragover'));
+  uploadArea.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
+    const file = e.dataTransfer.files[0];
+    if (file) processFile(file);
+  });
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) processFile(fileInput.files[0]);
+  });
+
+  sheetSel.addEventListener('change', () => renderSheet(sheetSel.value));
+
+  function processFile(file) {
+    hideError();
+    fileNameEl.textContent = '読み込み中...';
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        workbook = XLSX.read(data, {
+          type: 'array',
+          cellStyles: true,
+          cellNF: true,
+          sheetStubs: true
+        });
+
+        fileNameEl.textContent = '📄 ' + file.name;
+
+        // シートセレクター更新
+        sheetSel.innerHTML = '';
+        workbook.SheetNames.forEach(name => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          sheetSel.appendChild(opt);
+        });
+
+        sheetWrap.style.display = 'flex';
+
+        // Sheet1 を優先表示
+        const defaultSheet = workbook.SheetNames.includes('Sheet1')
+          ? 'Sheet1'
+          : workbook.SheetNames[0];
+        sheetSel.value = defaultSheet;
+        renderSheet(defaultSheet);
+      } catch (err) {
+        showError('ファイルの読み込みに失敗しました: ' + err.message);
+        fileNameEl.textContent = '';
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function renderSheet(sheetName) {
+    const ws = workbook.Sheets[sheetName];
+    if (!ws) return;
+
+    table.innerHTML = '';
+
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+
+    // 列幅情報 (Excel単位 → px: 1単位 ≈ 7px)
+    const colWidths = [];
+    if (ws['!cols']) {
+      ws['!cols'].forEach((col, i) => {
+        colWidths[i] = col && col.wch ? Math.round(col.wch * 7) : 80;
+      });
+    }
+
+    // 行高情報 (Excel pt → px: 1pt ≈ 1.33px)
+    const rowHeights = [];
+    if (ws['!rows']) {
+      ws['!rows'].forEach((row, i) => {
+        rowHeights[i] = row && row.hpx ? row.hpx : (row && row.hpt ? Math.round(row.hpt * 1.33) : 20);
+      });
+    }
+
+    // マージセル情報
+    const merges = ws['!merges'] || [];
+    const mergeMap = {}; // "R,C" → {rowspan, colspan} or null (hidden)
+    merges.forEach(m => {
+      const rs = m.e.r - m.s.r + 1;
+      const cs = m.e.c - m.s.c + 1;
+      mergeMap[`${m.s.r},${m.s.c}`] = { rowspan: rs, colspan: cs };
+      for (let r = m.s.r; r <= m.e.r; r++) {
+        for (let c = m.s.c; c <= m.e.c; c++) {
+          if (r !== m.s.r || c !== m.s.c) {
+            mergeMap[`${r},${c}`] = null; // hidden
+          }
+        }
+      }
+    });
+
+    const fragment = document.createDocumentFragment();
+
+    for (let R = range.s.r; R <= range.e.r; R++) {
+      const tr = document.createElement('tr');
+      const rowH = rowHeights[R] || 20;
+      tr.style.height = rowH + 'px';
+
+      for (let C = range.s.c; C <= range.e.c; C++) {
+        const key = `${R},${C}`;
+
+        // マージで非表示のセルはスキップ
+        if (mergeMap[key] === null) continue;
+
+        const td = document.createElement('td');
+
+        // マージ属性
+        if (mergeMap[key]) {
+          const { rowspan, colspan } = mergeMap[key];
+          if (rowspan > 1) td.rowSpan = rowspan;
+          if (colspan > 1) td.colSpan = colspan;
+        }
+
+        // セルアドレス
+        const cellAddr = XLSX.utils.encode_cell({ r: R, c: C });
+        const cell = ws[cellAddr];
+
+        // 列幅
+        const colW = colWidths[C] || 80;
+        td.style.minWidth = colW + 'px';
+        td.style.width    = colW + 'px';
+
+        if (cell) {
+          // 値の取得
+          const val = cell.w !== undefined ? cell.w : (cell.v !== undefined ? String(cell.v) : '');
+          td.textContent = val;
+
+          // スタイル適用
+          applyStyle(td, cell.s);
+        } else {
+          // 空セルでもスタイル確認
+          td.textContent = '';
+        }
+
+        tr.appendChild(td);
+      }
+
+      fragment.appendChild(tr);
+    }
+
+    table.appendChild(fragment);
+    tableWrap.style.display = 'block';
+  }
+
+  function applyStyle(td, s) {
+    if (!s) return;
+
+    // フォント
+    if (s.font) {
+      if (s.font.bold)   td.style.fontWeight = 'bold';
+      if (s.font.italic) td.style.fontStyle  = 'italic';
+      if (s.font.sz)     td.style.fontSize   = Math.round(s.font.sz * 1.33) + 'px';
+      if (s.font.color && s.font.color.rgb) {
+        td.style.color = '#' + s.font.color.rgb.slice(-6);
+      }
+      if (s.font.name)   td.style.fontFamily = s.font.name + ', sans-serif';
+      if (s.font.underline) td.style.textDecoration = 'underline';
+      if (s.font.strike)    td.style.textDecoration = 'line-through';
+    }
+
+    // 背景色
+    if (s.fgColor && s.fgColor.rgb && s.fgColor.rgb !== 'FFFFFF' && s.fgColor.rgb !== '00000000') {
+      td.style.backgroundColor = '#' + s.fgColor.rgb.slice(-6);
+    }
+    if (s.bgColor && s.bgColor.rgb && s.bgColor.rgb !== 'FFFFFF' && s.bgColor.rgb !== '00000000') {
+      if (!td.style.backgroundColor) {
+        td.style.backgroundColor = '#' + s.bgColor.rgb.slice(-6);
+      }
+    }
+    if (s.fill) {
+      if (s.fill.fgColor && s.fill.fgColor.rgb) {
+        const rgb = s.fill.fgColor.rgb.slice(-6);
+        if (rgb !== 'FFFFFF' && rgb !== '000000') {
+          td.style.backgroundColor = '#' + rgb;
+        }
+      }
+    }
+
+    // テキスト寄せ
+    if (s.alignment) {
+      const h = s.alignment.horizontal;
+      if (h === 'center') td.style.textAlign = 'center';
+      else if (h === 'right') td.style.textAlign = 'right';
+      else if (h === 'left')  td.style.textAlign = 'left';
+
+      const v = s.alignment.vertical;
+      if (v === 'center') td.style.verticalAlign = 'middle';
+      else if (v === 'top')    td.style.verticalAlign = 'top';
+      else if (v === 'bottom') td.style.verticalAlign = 'bottom';
+
+      if (s.alignment.wrapText) td.style.whiteSpace = 'pre-wrap';
+    }
+
+    // ボーダー（黒線を忠実に再現）
+    if (s.border) {
+      ['top', 'bottom', 'left', 'right'].forEach(side => {
+        const b = s.border[side];
+        if (b && b.style && b.style !== 'none') {
+          const color = (b.color && b.color.rgb) ? '#' + b.color.rgb.slice(-6) : '#000000';
+          const width = borderWidth(b.style);
+          const style = borderStyle(b.style);
+          td.style['border' + capitalize(side)] = `${width} ${style} ${color}`;
+        }
+      });
+    }
+  }
+
+  function borderWidth(style) {
+    switch (style) {
+      case 'thin':       return '1px';
+      case 'medium':     return '2px';
+      case 'thick':      return '3px';
+      case 'hair':       return '1px';
+      case 'double':     return '3px';
+      case 'dashed':     return '1px';
+      case 'dotted':     return '1px';
+      case 'mediumDashed': return '2px';
+      case 'dashDot':    return '1px';
+      case 'mediumDashDot': return '2px';
+      case 'dashDotDot': return '1px';
+      case 'slantDashDot': return '1px';
+      default:           return '1px';
+    }
+  }
+
+  function borderStyle(style) {
+    switch (style) {
+      case 'double':  return 'double';
+      case 'dashed':
+      case 'mediumDashed':
+      case 'dashDot':
+      case 'mediumDashDot':
+      case 'dashDotDot':
+      case 'slantDashDot': return 'dashed';
+      case 'dotted': return 'dotted';
+      default:       return 'solid';
+    }
+  }
+
+  function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  function showError(msg) { errorMsg.textContent = msg; errorMsg.style.display = 'block'; }
+  function hideError()    { errorMsg.style.display = 'none'; }
+</script>
+</body>
+</html>
