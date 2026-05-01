@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Excel ビジュアル再現</title>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="./xlsx.full.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -16,13 +16,6 @@
       flex-direction: column;
       align-items: center;
       padding: 32px 16px;
-    }
-
-    h1 {
-      font-size: 22px;
-      color: #1a1a2e;
-      margin-bottom: 24px;
-      letter-spacing: 0.05em;
     }
 
     /* アップロードエリア */
@@ -114,6 +107,7 @@
 
     /* テーブルラッパー */
     #table-wrap {
+      display: none;
       width: 100%;
       overflow-x: auto;
       background: #fff;
@@ -139,8 +133,6 @@
   </style>
 </head>
 <body>
-
-  <h1>Excel → Web ビジュアル再現</h1>
 
   <!-- アップロードエリア -->
   <div id="upload-area">
